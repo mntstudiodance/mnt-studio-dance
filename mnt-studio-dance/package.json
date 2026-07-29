@@ -1,7 +1,4 @@
 {
-  npm init -y
-},
-{
   "name": "mnt-studio-dance",
   "private": true,
   "version": "1.0.0",
