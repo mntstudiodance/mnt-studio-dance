@@ -1,4 +1,6 @@
-npm init -y
+{
+  npm init -y
+},
 {
   "name": "mnt-studio-dance",
   "private": true,
