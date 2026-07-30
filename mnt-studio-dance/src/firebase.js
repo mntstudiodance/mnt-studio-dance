@@ -6,12 +6,12 @@ import { initializeApp } from "firebase/app";
 import { getFirestore } from "firebase/firestore";
 
 const firebaseConfig = {
-  apiKey: "REMPLACER_apiKey",
-  authDomain: "REMPLACER_authDomain",
-  projectId: "REMPLACER_projectId",
-  storageBucket: "REMPLACER_storageBucket",
-  messagingSenderId: "REMPLACER_messagingSenderId",
-  appId: "REMPLACER_appId",
+  apiKey: "AIzaSyDAXL6ngQb0lOzFwUUkyb0ssO2Pe85Qx4M",
+  authDomain: "mnt-studio-dance-appel.firebaseapp.com",
+  projectId: "mnt-studio-dance-appel",
+  storageBucket: "mnt-studio-dance-appel.firebasestorage.app",
+  messagingSenderId: "434673162498",
+  appId: "1:434673162498:web:c30263b7169bbc63bc4a1b"
 };
 
 const app = initializeApp(firebaseConfig);
