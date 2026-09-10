@@ -1,0 +1,21 @@
+@import url("https://fonts.googleapis.com/css2?family=Bebas+Neue&family=Inter:wght@400;500;600;700&display=swap");
+
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+* {
+  font-family: "Inter", sans-serif;
+}
+
+body {
+  margin: 0;
+  background: #100d18;
+}
+
+@keyframes blink-warning {
+  0%, 45% { opacity: 1; }
+  50%, 95% { opacity: 0.15; }
+  100% { opacity: 1; }
+}
+.blink-warning { animation: blink-warning 1s steps(1, end) infinite; }
