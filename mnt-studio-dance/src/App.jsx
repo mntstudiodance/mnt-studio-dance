@@ -659,6 +659,7 @@ const DOC_REF = doc(db, "mnt-studio", STORAGE_KEY);
 // sans jamais avoir à recharger la page. Retourne la fonction de désabonnement.
 function subscribeToData(callback) {
   let initialized = false;
+  let seeding = false;
   const unsubscribe = onSnapshot(
     DOC_REF,
     async (snap) => {
@@ -667,15 +668,29 @@ function subscribeToData(callback) {
         callback(migrateData(snap.data()));
         return;
       }
-      if (!initialized) {
-        initialized = true;
-        const seed = defaultData();
-        try {
-          await setDoc(DOC_REF, seed);
-        } catch (e) {
-          console.error("Erreur d'initialisation Firestore", e);
-        }
-        callback(seed);
+      // ATTENTION, POINT CRITIQUE : un instantané Firestore peut signaler "le document
+      // n'existe pas" alors qu'il existe bel et bien côté serveur — c'est le cas quand cet
+      // instantané provient du cache local (réseau lent, coupure Wi-Fi, première connexion
+      // après une longue absence) et non d'une lecture confirmée par le serveur. Réinitialiser
+      // la base sur la foi d'une telle lecture non confirmée écraserait TOUTES les données
+      // réelles. On ignore donc systématiquement une "absence" qui vient du cache, on
+      // n'initialise plus jamais après avoir déjà vu de vraies données, et même dans le seul
+      // cas restant (tout premier lancement, absence confirmée par le serveur), on recrée le
+      // document via une transaction qui revérifie son existence au moment même de l'écriture,
+      // pour ne jamais écraser des données créées entre-temps par un autre compte.
+      if (snap.metadata.fromCache) return;
+      if (initialized || seeding) return;
+      seeding = true;
+      try {
+        await runTransaction(db, async (tx) => {
+          const freshSnap = await tx.get(DOC_REF);
+          if (freshSnap.exists()) return;
+          tx.set(DOC_REF, defaultData());
+        });
+      } catch (e) {
+        console.error("Erreur d'initialisation Firestore", e);
+      } finally {
+        seeding = false;
       }
     },
     (error) => {
