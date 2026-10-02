@@ -722,35 +722,25 @@ function migrateData(d) {
 // Retourne une fonction de désabonnement.
 function subscribeToData(callback) {
   let initialized = false;
-  let seeding = false;
-  const unsubscribe = onSnapshot(
-    DOC_REF,
-    async (snap) => {
-      if (snap.exists()) {
-        initialized = true;
-        callback(migrateData(snap.data()));
-        return;
-      }
-      if (snap.metadata.fromCache) return;
-      if (initialized || seeding) return;
-      seeding = true;
-      try {
-        await runTransaction(db, async (tx) => {
-          const freshSnap = await tx.get(DOC_REF);
-          if (freshSnap.exists()) return;
-          tx.set(DOC_REF, defaultData());
-        });
-      } catch (e) {
-        console.error("Erreur d'initialisation Firestore", e);
-      } finally {
-        seeding = false;
-      }
-    },
-    (error) => {
-      console.error("Erreur de synchronisation Firestore", error);
+  return onSnapshot(DOC_REF, async (snap) => {
+    if (snap.metadata.fromCache) return;
+    if (snap.exists()) {
+      initialized = true;
+      callback(mergeWithDefaults(snap.data()));
+      return;
     }
-  );
-  return unsubscribe;
+    if (initialized) return;
+    try {
+      await runTransaction(db, async (tx) => {
+        const fresh = await tx.get(DOC_REF);
+        if (fresh.exists()) return;
+        tx.set(DOC_REF, defaultData());
+      });
+      initialized = true;
+    } catch (e) {
+      console.error("Erreur d'initialisation Firestore", e);
+    }
+  });
 }
 
 // Reçoit uniquement le "patch" (les clés de premier niveau réellement modifiées).
@@ -860,9 +850,7 @@ async function applyFieldTransform(field, transform, emptyValue) {
       const fresh = current[field] !== undefined ? current[field] : emptyValue;
       const next = transform(fresh);
       if (isSuspiciousWipe(fresh, next)) {
-        throw new Error(
-          `Écriture refusée par sécurité : "${field}" passerait de ${countEntries(fresh)} à 0 élément(s). Rechargez la page et réessayez.`
-        );
+        throw new Error(`Écriture refusée par sécurité : "${field}" passerait de ${countEntries(fresh)} à 0 élément(s). Rechargez la page et réessayez.`);
       }
       tx.update(DOC_REF, { [field]: next });
     });
@@ -1805,11 +1793,12 @@ function emptyStudentForm() {
   };
 }
 
-function ManageStudents({ data, setData, readOnly }) {
+function ManageStudents({ data, setData, readOnly, showAttendanceStats = true }) {
   const [siteFilter, setSiteFilter] = useState("all");
   const [search, setSearch] = useState("");
   const [editing, setEditing] = useState(null);
   const [form, setForm] = useState(emptyStudentForm());
+  const [statsOpenId, setStatsOpenId] = useState(null);
 
   const startNew = () => {
     setForm(emptyStudentForm());
@@ -2287,17 +2276,45 @@ function ManageStudents({ data, setData, readOnly }) {
                   </div>
                 )}
               </div>
-              {!readOnly && (
-                <div className="flex shrink-0 gap-1">
-                  <button onClick={() => startEdit(s)} className="rounded p-1.5 text-[#A79FC0] hover:bg-white/5 hover:text-[#F5F1FA]">
-                    <Pencil size={15} />
+              <div className="flex shrink-0 gap-1">
+                {showAttendanceStats && (
+                  <button
+                    onClick={() => setStatsOpenId(statsOpenId === s.id ? null : s.id)}
+                    className="rounded p-1.5 text-[#A79FC0] hover:bg-white/5 hover:text-[#F5F1FA]"
+                    title="Statistiques de présence"
+                  >
+                    <BarChart3 size={15} />
                   </button>
-                  <button onClick={() => remove(s.id)} className="rounded p-1.5 text-[#A79FC0] hover:bg-[#FF6B6B]/10 hover:text-[#FF6B6B]">
-                    <Trash2 size={15} />
-                  </button>
-                </div>
-              )}
+                )}
+                {!readOnly && (
+                  <>
+                    <button onClick={() => startEdit(s)} className="rounded p-1.5 text-[#A79FC0] hover:bg-white/5 hover:text-[#F5F1FA]">
+                      <Pencil size={15} />
+                    </button>
+                    <button onClick={() => remove(s.id)} className="rounded p-1.5 text-[#A79FC0] hover:bg-[#FF6B6B]/10 hover:text-[#FF6B6B]">
+                      <Trash2 size={15} />
+                    </button>
+                  </>
+                )}
+              </div>
             </div>
+            {showAttendanceStats && statsOpenId === s.id && (
+              <div className="mt-3 border-t border-white/10 pt-3">
+                <span className="mb-2 block text-[11px] uppercase tracking-[0.14em] text-[#A79FC0]">Présence par cours</span>
+                {studentAttendanceByCourse(data, s).map(({ course, present, absent, total, rate }) => (
+                  <StatBar
+                    key={course.id}
+                    label={`${course.name} (${course.day})`}
+                    value={rate ?? 0}
+                    max={100}
+                    color={course.color}
+                    displayValue={rate === null ? "—" : `${rate}%`}
+                    sub={total ? `${present} présence(s) · ${absent} absence(s) sur ${total} appel(s)` : "Pas encore d'appel enregistré"}
+                  />
+                ))}
+                {(!s.courseIds || s.courseIds.length === 0) && <p className="text-sm text-[#5D5670]">Aucun cours assigné.</p>}
+              </div>
+            )}
           </Card>
         ))}
         {filtered.length === 0 && <p className="text-sm text-[#5D5670]">Aucun élève trouvé.</p>}
@@ -3474,13 +3491,245 @@ function courseAttendanceStats(data, courseId) {
   return { present, total, rate: total ? Math.round((present / total) * 100) : null };
 }
 
+/* ------------------------ Présences hebdomadaires (graphiques) ------------------------ */
+
+// Lundi (YYYY-MM-DD) de la semaine civile contenant dateStr.
+function mondayOf(dateStr) {
+  const d = new Date(dateStr + "T00:00:00");
+  const dow = d.getDay(); // 0 = dimanche … 6 = samedi
+  const diff = dow === 0 ? -6 : 1 - dow;
+  d.setDate(d.getDate() + diff);
+  return d.toISOString().slice(0, 10);
+}
+
+function addDaysISO(dateStr, days) {
+  const d = new Date(dateStr + "T00:00:00");
+  d.setDate(d.getDate() + days);
+  return d.toISOString().slice(0, 10);
+}
+
+function formatWeekLabel(mondayStr) {
+  return new Date(mondayStr + "T00:00:00").toLocaleDateString("fr-FR", { day: "2-digit", month: "short" });
+}
+
+// Une semaine est exclue des graphiques si elle est intégralement couverte par une période de vacances
+// scolaires (lundi ET dimanche dans la période) : il n'y a alors aucun cours cette semaine-là.
+function isFullHolidayWeek(schoolHolidays, mondayStr) {
+  const sundayStr = addDaysISO(mondayStr, 6);
+  return (schoolHolidays || []).some((h) => h.start <= mondayStr && h.end >= sundayStr);
+}
+
+// Présences hebdomadaires pour un cours donné (semaines de vacances exclues), triées chronologiquement.
+function weeklyAttendanceForCourse(data, courseId) {
+  const byWeek = {};
+  Object.entries(data.attendance).forEach(([key, rec]) => {
+    if (!key.startsWith(courseId + "|")) return;
+    const dateStr = key.slice(courseId.length + 1);
+    const monday = mondayOf(dateStr);
+    if (isFullHolidayWeek(data.schoolHolidays, monday)) return;
+    if (!byWeek[monday]) byWeek[monday] = { present: 0, total: 0 };
+    Object.values(rec.marks || {}).forEach((status) => {
+      byWeek[monday].total++;
+      if (status === "present") byWeek[monday].present++;
+    });
+  });
+  return Object.entries(byWeek)
+    .map(([weekStart, v]) => ({ weekStart, ...v }))
+    .sort((a, b) => (a.weekStart < b.weekStart ? -1 : 1));
+}
+
+// Nombre d'élèves uniques présents chaque semaine (toutes sites/cours confondus par défaut, semaines
+// de vacances exclues). `courseIds`, `from`, `to` permettent de restreindre le périmètre et la période.
+function weeklyUniqueStudentsGlobal(data, { from, to, courseIds } = {}) {
+  const byWeek = {};
+  Object.entries(data.attendance).forEach(([key, rec]) => {
+    const sep = key.indexOf("|");
+    const courseId = key.slice(0, sep);
+    if (courseIds && !courseIds.has(courseId)) return;
+    const dateStr = key.slice(sep + 1);
+    if (from && dateStr < from) return;
+    if (to && dateStr > to) return;
+    const monday = mondayOf(dateStr);
+    if (isFullHolidayWeek(data.schoolHolidays, monday)) return;
+    Object.entries(rec.marks || {}).forEach(([studentId, status]) => {
+      if (status !== "present") return;
+      if (!byWeek[monday]) byWeek[monday] = new Set();
+      byWeek[monday].add(studentId);
+    });
+  });
+  return Object.entries(byWeek)
+    .map(([weekStart, set]) => ({ weekStart, count: set.size }))
+    .sort((a, b) => (a.weekStart < b.weekStart ? -1 : 1));
+}
+
+// Pour un élève donné : présences / absences / taux pour chacun de ses cours suivis.
+function studentAttendanceByCourse(data, student) {
+  return (student.courseIds || [])
+    .map((courseId) => data.courses.find((c) => c.id === courseId))
+    .filter(Boolean)
+    .map((course) => {
+      let present = 0;
+      let absent = 0;
+      Object.entries(data.attendance).forEach(([key, rec]) => {
+        if (!key.startsWith(course.id + "|")) return;
+        const status = (rec.marks || {})[student.id];
+        if (status === "present") present++;
+        else if (status === "absent") absent++;
+      });
+      const total = present + absent;
+      return { course, present, absent, total, rate: total ? Math.round((present / total) * 100) : null };
+    });
+}
+
+// Graphique à barres (SVG fait main, pas de dépendance externe) : présences par semaine pour un cours.
+function WeeklyBarChart({ weeks, color = "#7C9EFF", emptyMessage }) {
+  if (!weeks.length) {
+    return <p className="text-sm text-[#5D5670]">{emptyMessage || "Pas encore d'appels enregistrés pour ce cours."}</p>;
+  }
+  const W = 640;
+  const H = 180;
+  const padLeft = 10;
+  const padRight = 10;
+  const padTop = 10;
+  const padBottom = 24;
+  const chartW = W - padLeft - padRight;
+  const chartH = H - padTop - padBottom;
+  const max = Math.max(1, ...weeks.map((w) => w.present));
+  const slot = chartW / weeks.length;
+  const barW = Math.max(4, Math.min(28, slot - 6));
+
+  return (
+    <div className="overflow-x-auto">
+      <svg viewBox={`0 0 ${W} ${H}`} className="w-full" style={{ minWidth: Math.max(280, weeks.length * 34) }}>
+        {[0, 0.5, 1].map((f) => (
+          <line
+            key={f}
+            x1={padLeft}
+            x2={W - padRight}
+            y1={padTop + chartH * (1 - f)}
+            y2={padTop + chartH * (1 - f)}
+            stroke="rgba(255,255,255,0.08)"
+            strokeWidth="1"
+          />
+        ))}
+        {weeks.map((w, i) => {
+          const h = (w.present / max) * chartH;
+          const x = padLeft + i * slot + (slot - barW) / 2;
+          const y = padTop + chartH - h;
+          return (
+            <g key={w.weekStart}>
+              <rect x={x} y={y} width={barW} height={Math.max(1, h)} rx="2" fill={color}>
+                <title>{`Semaine du ${formatWeekLabel(w.weekStart)} : ${w.present} présence(s)`}</title>
+              </rect>
+              <text x={x + barW / 2} y={H - 7} textAnchor="middle" fontSize="9" fill="#5D5670">
+                {formatWeekLabel(w.weekStart)}
+              </text>
+            </g>
+          );
+        })}
+      </svg>
+    </div>
+  );
+}
+
+// Graphique à courbe (SVG fait main) : nombre d'élèves uniques présents par semaine.
+function WeeklyLineChart({ weeks, color = "#4ADE80", emptyMessage }) {
+  if (!weeks.length) {
+    return <p className="text-sm text-[#5D5670]">{emptyMessage || "Pas encore de données pour cette période."}</p>;
+  }
+  const W = 640;
+  const H = 200;
+  const padLeft = 10;
+  const padRight = 10;
+  const padTop = 14;
+  const padBottom = 24;
+  const chartW = W - padLeft - padRight;
+  const chartH = H - padTop - padBottom;
+  const max = Math.max(1, ...weeks.map((w) => w.count));
+  const stepX = weeks.length > 1 ? chartW / (weeks.length - 1) : 0;
+  const points = weeks.map((w, i) => ({
+    x: weeks.length > 1 ? padLeft + i * stepX : padLeft + chartW / 2,
+    y: padTop + chartH - (w.count / max) * chartH,
+    ...w,
+  }));
+  const pathD = points.map((p, i) => `${i === 0 ? "M" : "L"} ${p.x} ${p.y}`).join(" ");
+  const labelEvery = Math.max(1, Math.ceil(weeks.length / 14));
+
+  return (
+    <div className="overflow-x-auto">
+      <svg viewBox={`0 0 ${W} ${H}`} className="w-full" style={{ minWidth: Math.max(280, weeks.length * 26) }}>
+        {[0, 0.5, 1].map((f) => (
+          <line
+            key={f}
+            x1={padLeft}
+            x2={W - padRight}
+            y1={padTop + chartH * (1 - f)}
+            y2={padTop + chartH * (1 - f)}
+            stroke="rgba(255,255,255,0.08)"
+            strokeWidth="1"
+          />
+        ))}
+        <path d={pathD} fill="none" stroke={color} strokeWidth="2" />
+        {points.map((p, i) => (
+          <g key={p.weekStart}>
+            <circle cx={p.x} cy={p.y} r="3" fill={color}>
+              <title>{`Semaine du ${formatWeekLabel(p.weekStart)} : ${p.count} élève(s) présent(s)`}</title>
+            </circle>
+            {(i % labelEvery === 0 || i === points.length - 1) && (
+              <text x={p.x} y={H - 7} textAnchor="middle" fontSize="9" fill="#5D5670">
+                {formatWeekLabel(p.weekStart)}
+              </text>
+            )}
+          </g>
+        ))}
+      </svg>
+    </div>
+  );
+}
+
 function StatisticsView({ data, isAdmin = false }) {
   const [siteFilter, setSiteFilter] = useState("all");
+  const [weeklyCourseId, setWeeklyCourseId] = useState("");
+  const [periodFrom, setPeriodFrom] = useState("");
+  const [periodTo, setPeriodTo] = useState("");
 
   const courses = siteFilter === "all" ? data.courses : data.courses.filter((c) => c.site === siteFilter);
   const courseIdsInScope = new Set(courses.map((c) => c.id));
   const studentsInScope =
     siteFilter === "all" ? data.students : data.students.filter((s) => (s.courseIds || []).some((cid) => courseIdsInScope.has(cid)));
+
+  // Présences hebdomadaires par cours (graphique à barres)
+  useEffect(() => {
+    if (weeklyCourseId && !courses.find((c) => c.id === weeklyCourseId)) setWeeklyCourseId("");
+  }, [courses.length, siteFilter]);
+  const weeklyCourse = courses.find((c) => c.id === weeklyCourseId) || courses[0] || null;
+  const weeklyCourseSeries = weeklyCourse ? weeklyAttendanceForCourse(data, weeklyCourse.id) : [];
+
+  // Présences hebdomadaires globales (graphique à courbe, élèves uniques, filtrable par période)
+  const applyPeriodPreset = (preset) => {
+    const today = todayISO();
+    const d = new Date();
+    if (preset === "all") {
+      setPeriodFrom("");
+      setPeriodTo("");
+    } else if (preset === "month") {
+      setPeriodFrom(new Date(d.getFullYear(), d.getMonth(), 1).toISOString().slice(0, 10));
+      setPeriodTo(today);
+    } else if (preset === "quarter") {
+      const qStartMonth = Math.floor(d.getMonth() / 3) * 3;
+      setPeriodFrom(new Date(d.getFullYear(), qStartMonth, 1).toISOString().slice(0, 10));
+      setPeriodTo(today);
+    } else if (preset === "schoolYear") {
+      const startYear = d.getMonth() >= 7 ? d.getFullYear() : d.getFullYear() - 1;
+      setPeriodFrom(`${startYear}-09-01`);
+      setPeriodTo(today);
+    }
+  };
+  const globalWeeklySeries = weeklyUniqueStudentsGlobal(data, {
+    from: periodFrom || undefined,
+    to: periodTo || undefined,
+    courseIds: siteFilter === "all" ? undefined : courseIdsInScope,
+  });
 
   // KPIs globaux
   const totalStudents = studentsInScope.length;
@@ -3684,6 +3933,68 @@ function StatisticsView({ data, isAdmin = false }) {
         <StatCard label="Remplissage moyen" value={avgEnrollment} accent="#4ADE80" />
         <StatCard label="Taux de présence" value={globalRate === null ? "—" : `${globalRate}%`} accent="#60A5FA" />
       </div>
+
+      <Card>
+        <div className="mb-4 flex flex-wrap items-center justify-between gap-3">
+          <h3 className="text-sm uppercase tracking-[0.14em] text-[#A79FC0]">Présences par semaine — par cours</h3>
+          <select
+            className={inputCls + " !w-auto !py-1.5 text-xs"}
+            value={weeklyCourse?.id || ""}
+            onChange={(e) => setWeeklyCourseId(e.target.value)}
+          >
+            {courses.length === 0 && <option value="">Aucun cours</option>}
+            {courses.map((c) => (
+              <option key={c.id} value={c.id}>
+                {c.name} — {c.day} {c.time}
+              </option>
+            ))}
+          </select>
+        </div>
+        <WeeklyBarChart weeks={weeklyCourseSeries} color={weeklyCourse?.color} />
+        <p className="mt-2 text-xs text-[#5D5670]">Les semaines entièrement en vacances scolaires ne sont pas affichées.</p>
+      </Card>
+
+      <Card>
+        <div className="mb-4 flex flex-wrap items-center justify-between gap-3">
+          <h3 className="text-sm uppercase tracking-[0.14em] text-[#A79FC0]">Présences par semaine — vue globale</h3>
+          <div className="flex flex-wrap items-center gap-2">
+            <button
+              onClick={() => applyPeriodPreset("all")}
+              className={`rounded-full border px-3 py-1 text-xs transition ${
+                !periodFrom && !periodTo ? "border-white/30 bg-white/10 text-[#F5F1FA]" : "border-white/10 text-[#A79FC0] hover:text-[#F5F1FA]"
+              }`}
+            >
+              Tout l'historique
+            </button>
+            <button
+              onClick={() => applyPeriodPreset("month")}
+              className="rounded-full border border-white/10 px-3 py-1 text-xs text-[#A79FC0] transition hover:text-[#F5F1FA]"
+            >
+              Ce mois
+            </button>
+            <button
+              onClick={() => applyPeriodPreset("quarter")}
+              className="rounded-full border border-white/10 px-3 py-1 text-xs text-[#A79FC0] transition hover:text-[#F5F1FA]"
+            >
+              Ce trimestre
+            </button>
+            <button
+              onClick={() => applyPeriodPreset("schoolYear")}
+              className="rounded-full border border-white/10 px-3 py-1 text-xs text-[#A79FC0] transition hover:text-[#F5F1FA]"
+            >
+              Année scolaire
+            </button>
+            <input type="date" className={inputCls + " !w-auto !py-1 text-xs"} value={periodFrom} onChange={(e) => setPeriodFrom(e.target.value)} />
+            <span className="text-xs text-[#5D5670]">→</span>
+            <input type="date" className={inputCls + " !w-auto !py-1 text-xs"} value={periodTo} onChange={(e) => setPeriodTo(e.target.value)} />
+          </div>
+        </div>
+        <WeeklyLineChart weeks={globalWeeklySeries} />
+        <p className="mt-2 text-xs text-[#5D5670]">
+          Un élève présent à plusieurs cours la même semaine n'est compté qu'une fois. Les semaines entièrement en vacances scolaires ne
+          sont pas affichées.
+        </p>
+      </Card>
 
       <div className="grid gap-4 md:grid-cols-2">
         <Card>
@@ -4205,7 +4516,7 @@ function StaffApp({ data, setData, staffId, onLogout }) {
         />
       )}
       {page === "planning" && <Dashboard data={data} showSynthese={isMike} hideSensitiveStats={hideSensitiveStats} />}
-      {page === "students" && <ManageStudents data={data} setData={setData} readOnly />}
+      {page === "students" && <ManageStudents data={data} setData={setData} readOnly showAttendanceStats={isMike} />}
       {page === "unpaid" && <UnpaidStudentsView data={data} setData={setData} readOnly />}
       {page === "statistics" && isMike && <StatisticsView data={data} />}
       {page === "teachers" && isMike && <ManageTeachers data={data} setData={setData} />}
