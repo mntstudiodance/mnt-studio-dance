@@ -722,25 +722,35 @@ function migrateData(d) {
 // Retourne une fonction de désabonnement.
 function subscribeToData(callback) {
   let initialized = false;
-  return onSnapshot(DOC_REF, async (snap) => {
-    if (snap.metadata.fromCache) return;
-    if (snap.exists()) {
-      initialized = true;
-      callback(mergeWithDefaults(snap.data()));
-      return;
+  let seeding = false;
+  const unsubscribe = onSnapshot(
+    DOC_REF,
+    async (snap) => {
+      if (snap.exists()) {
+        initialized = true;
+        callback(migrateData(snap.data()));
+        return;
+      }
+      if (snap.metadata.fromCache) return;
+      if (initialized || seeding) return;
+      seeding = true;
+      try {
+        await runTransaction(db, async (tx) => {
+          const freshSnap = await tx.get(DOC_REF);
+          if (freshSnap.exists()) return;
+          tx.set(DOC_REF, defaultData());
+        });
+      } catch (e) {
+        console.error("Erreur d'initialisation Firestore", e);
+      } finally {
+        seeding = false;
+      }
+    },
+    (error) => {
+      console.error("Erreur de synchronisation Firestore", error);
     }
-    if (initialized) return;
-    try {
-      await runTransaction(db, async (tx) => {
-        const fresh = await tx.get(DOC_REF);
-        if (fresh.exists()) return;
-        tx.set(DOC_REF, defaultData());
-      });
-      initialized = true;
-    } catch (e) {
-      console.error("Erreur d'initialisation Firestore", e);
-    }
-  });
+  );
+  return unsubscribe;
 }
 
 // Reçoit uniquement le "patch" (les clés de premier niveau réellement modifiées).
