@@ -3597,10 +3597,10 @@ function WeeklyBarChart({ weeks, color = "#7C9EFF", emptyMessage }) {
     return <p className="text-sm text-[#5D5670]">{emptyMessage || "Pas encore d'appels enregistrés pour ce cours."}</p>;
   }
   const W = 640;
-  const H = 180;
+  const H = 194;
   const padLeft = 10;
   const padRight = 10;
-  const padTop = 10;
+  const padTop = 22;
   const padBottom = 24;
   const chartW = W - padLeft - padRight;
   const chartH = H - padTop - padBottom;
@@ -3628,6 +3628,9 @@ function WeeklyBarChart({ weeks, color = "#7C9EFF", emptyMessage }) {
           const y = padTop + chartH - h;
           return (
             <g key={w.weekStart}>
+              <text x={x + barW / 2} y={Math.max(10, y - 6)} textAnchor="middle" fontSize="11" fontWeight="600" fill="#F5F1FA">
+                {w.present}
+              </text>
               <rect x={x} y={y} width={barW} height={Math.max(1, h)} rx="2" fill={color}>
                 <title>{`Semaine du ${formatWeekLabel(w.weekStart)} : ${w.present} présence(s)`}</title>
               </rect>
@@ -3648,10 +3651,10 @@ function WeeklyLineChart({ weeks, color = "#4ADE80", emptyMessage }) {
     return <p className="text-sm text-[#5D5670]">{emptyMessage || "Pas encore de données pour cette période."}</p>;
   }
   const W = 640;
-  const H = 200;
+  const H = 212;
   const padLeft = 10;
   const padRight = 10;
-  const padTop = 14;
+  const padTop = 26;
   const padBottom = 24;
   const chartW = W - padLeft - padRight;
   const chartH = H - padTop - padBottom;
@@ -3664,10 +3667,11 @@ function WeeklyLineChart({ weeks, color = "#4ADE80", emptyMessage }) {
   }));
   const pathD = points.map((p, i) => `${i === 0 ? "M" : "L"} ${p.x} ${p.y}`).join(" ");
   const labelEvery = Math.max(1, Math.ceil(weeks.length / 14));
+  const valueLabelEvery = Math.max(1, Math.ceil(weeks.length / 20));
 
   return (
     <div className="overflow-x-auto">
-      <svg viewBox={`0 0 ${W} ${H}`} className="w-full" style={{ minWidth: Math.max(280, weeks.length * 26) }}>
+      <svg viewBox={`0 0 ${W} ${H}`} className="w-full" style={{ minWidth: Math.max(280, weeks.length * 30) }}>
         {[0, 0.5, 1].map((f) => (
           <line
             key={f}
@@ -3685,6 +3689,11 @@ function WeeklyLineChart({ weeks, color = "#4ADE80", emptyMessage }) {
             <circle cx={p.x} cy={p.y} r="3" fill={color}>
               <title>{`Semaine du ${formatWeekLabel(p.weekStart)} : ${p.count} élève(s) présent(s)`}</title>
             </circle>
+            {(i % valueLabelEvery === 0 || i === points.length - 1) && (
+              <text x={p.x} y={Math.max(10, p.y - 8)} textAnchor="middle" fontSize="11" fontWeight="600" fill="#F5F1FA">
+                {p.count}
+              </text>
+            )}
             {(i % labelEvery === 0 || i === points.length - 1) && (
               <text x={p.x} y={H - 7} textAnchor="middle" fontSize="9" fill="#5D5670">
                 {formatWeekLabel(p.weekStart)}
@@ -3712,7 +3721,7 @@ function StatisticsView({ data, isAdmin = false }) {
   useEffect(() => {
     if (weeklyCourseId && !courses.find((c) => c.id === weeklyCourseId)) setWeeklyCourseId("");
   }, [courses.length, siteFilter]);
-  const weeklyCourse = courses.find((c) => c.id === weeklyCourseId) || courses[0] || null;
+  const weeklyCourse = courses.find((c) => c.id === weeklyCourseId) || null;
   const weeklyCourseSeries = weeklyCourse ? weeklyAttendanceForCourse(data, weeklyCourse.id) : [];
 
   // Présences hebdomadaires globales (graphique à courbe, élèves uniques, filtrable par période)
@@ -3948,11 +3957,11 @@ function StatisticsView({ data, isAdmin = false }) {
         <div className="mb-4 flex flex-wrap items-center justify-between gap-3">
           <h3 className="text-sm uppercase tracking-[0.14em] text-[#A79FC0]">Présences par semaine — par cours</h3>
           <select
-            className={inputCls + " !w-auto !py-1.5 text-xs"}
+            className={inputCls + " w-full py-1.5 text-xs sm:w-auto sm:max-w-[280px]"}
             value={weeklyCourse?.id || ""}
             onChange={(e) => setWeeklyCourseId(e.target.value)}
           >
-            {courses.length === 0 && <option value="">Aucun cours</option>}
+            <option value="">— Choisir un cours —</option>
             {courses.map((c) => (
               <option key={c.id} value={c.id}>
                 {c.name} — {c.day} {c.time}
@@ -3960,7 +3969,13 @@ function StatisticsView({ data, isAdmin = false }) {
             ))}
           </select>
         </div>
-        <WeeklyBarChart weeks={weeklyCourseSeries} color={weeklyCourse?.color} />
+        {weeklyCourse ? (
+          <WeeklyBarChart weeks={weeklyCourseSeries} color={weeklyCourse.color} />
+        ) : (
+          <p className="text-sm text-[#5D5670]">
+            {courses.length === 0 ? "Aucun cours pour ce filtre." : "Choisissez un cours ci-dessus pour afficher le graphique."}
+          </p>
+        )}
         <p className="mt-2 text-xs text-[#5D5670]">Les semaines entièrement en vacances scolaires ne sont pas affichées.</p>
       </Card>
 
