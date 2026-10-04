@@ -201,6 +201,7 @@ const STATUTS = [
   { key: "paye", label: "Payé", color: "#4ADE80" },
   { key: "en_cours", label: "Cours d'essai", color: "#60A5FA" },
   { key: "attente_reglement", label: "En attente de règlement", color: "#FB923C" },
+  { key: "paiement_incomplet", label: "Paiement incomplet", color: "#A855F7" },
   { key: "impaye", label: "Impayé", color: "#FF6B6B" },
 ];
 const statutInfo = (key) => STATUTS.find((s) => s.key === key) || STATUTS[1];
@@ -1351,7 +1352,7 @@ function Dashboard({ data, showSynthese = true, hideSensitiveStats = false, isAd
   const rate = totalMarks ? Math.round((presentCount / totalMarks) * 100) : null;
 
   const filtered = siteFilter === "all" ? data.courses : data.courses.filter((c) => c.site === siteFilter);
-  const synthStatutOrder = ["paye", "attente_reglement", "impaye", "en_cours"]
+  const synthStatutOrder = ["paye", "attente_reglement", "paiement_incomplet", "impaye", "en_cours"]
     .map((k) => STATUTS.find((s) => s.key === k))
     .filter(Boolean);
 
