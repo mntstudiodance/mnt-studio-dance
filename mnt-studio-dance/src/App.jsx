@@ -5169,7 +5169,7 @@ export default function App() {
   const [loading, setLoading] = useState(true);
   const sessionRestoredRef = useRef(false);
   const dataRef = useRef(null);
-  const MAX_SESSION_MS = 60 * 60 * 1000; // 1 heure
+  const MAX_SESSION_MS = 240 * 60 * 1000; // 4 heures
 
   useEffect(() => {
     dataRef.current = data;
