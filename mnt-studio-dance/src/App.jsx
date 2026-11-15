@@ -1,8 +1,8 @@
 import React, { useState, useEffect, useCallback, useRef } from "react";
-import { doc, setDoc, onSnapshot, runTransaction } from "firebase/firestore";
-import { db } from "./firebase";
 import { LogOut, LogIn, Plus, Trash2, Pencil, Check, X, Users, CalendarDays, LayoutDashboard, GraduationCap, Settings, MapPin, Sparkles, Clock, ClipboardCheck, Search, User, Lock, CalendarX, Bell, Mail, UserCog, Eye, MessageSquare, FileSpreadsheet, Printer, Upload, ChevronLeft, ChevronRight, Wallet, ChevronDown, ChevronUp, BarChart3, TrendingUp, TrendingDown, Download, AlertTriangle, Phone, Send, StickyNote } from "lucide-react";
 import * as XLSX from "xlsx";
+import { doc, setDoc, onSnapshot, runTransaction } from "firebase/firestore";
+import { db } from "./firebase";
 
 /* ------------------------------------------------------------------
    MNT STUDIO DANCE — Registre de présences
@@ -1542,7 +1542,36 @@ function Dashboard({ data, showSynthese = true, hideSensitiveStats = false, isAd
           {filtered.length === 0 && <p className="text-sm text-[#5D5670]">Aucun cours pour ce filtre.</p>}
         </div>
       </Card>
+
+      {isAdmin && <DataSizeCard data={data} />}
     </div>
+  );
+}
+
+// Estimation de la taille du document Firestore (toute l'application tient dans un seul document,
+// limité à 1 Mo). Calculée à partir du JSON : c'est une estimation, pas la mesure exacte de Firestore.
+function DataSizeCard({ data }) {
+  const LIMIT_KB = 1024;
+  const sizeKB = Math.round(new Blob([JSON.stringify(data)]).size / 1024);
+  const pct = Math.round((sizeKB / LIMIT_KB) * 100);
+  const color = pct >= 80 ? "#FF6B6B" : pct >= 60 ? "#FB923C" : "#4ADE80";
+  const attendanceKB = Math.round(new Blob([JSON.stringify(data.attendance || {})]).size / 1024);
+  return (
+    <Card>
+      <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
+        <h3 className="text-sm uppercase tracking-[0.14em] text-[#A79FC0]">Taille des données (estimation)</h3>
+        <span className="text-sm" style={{ color }}>
+          {sizeKB} Ko sur {LIMIT_KB} Ko · {pct} %
+        </span>
+      </div>
+      <div className="h-2 overflow-hidden rounded-full bg-white/10">
+        <div className="h-full rounded-full" style={{ width: `${Math.min(100, pct)}%`, backgroundColor: color }} />
+      </div>
+      <p className="mt-2 text-xs text-[#5D5670]">
+        Dont {attendanceKB} Ko d'historique des appels. Toute l'application est stockée dans un seul document dont la limite est de
+        1 Mo : au-delà de 80 %, prévenez-moi pour archiver les anciens appels.
+      </p>
+    </Card>
   );
 }
 
@@ -4751,16 +4780,34 @@ function TakeRoll({ data, setData, courses, emptyMessage, actor, showTeacherFilt
     return <p className="text-sm text-[#5D5670]">{emptyMessage || "Aucun cours disponible."}</p>;
   }
 
+  // Règle de gestion : tout élève du cours est ABSENT par défaut. `marks` ne contient que les
+  // choix explicites ; `effectiveMarks` complète avec "absent" pour tous les élèves sans marque.
+  const effectiveMarks = { ...marks };
+  roster.forEach((s) => {
+    if (!effectiveMarks[s.id]) effectiveMarks[s.id] = "absent";
+  });
+  const presentCount = roster.filter((s) => effectiveMarks[s.id] === "present").length;
+
   const setMark = (studentId, status) => {
-    setMarks((m) => ({ ...m, [studentId]: m[studentId] === status ? undefined : status }));
+    setMarks((m) => {
+      const current = m[studentId] || "absent";
+      // Un second clic sur "Présent" remet l'élève en absent (il n'y a plus d'état "vide").
+      return { ...m, [studentId]: status === "present" && current === "present" ? "absent" : status };
+    });
   };
 
   const save = () => {
+    if (roster.length > 0 && presentCount === 0) {
+      const ok = window.confirm(
+        "Aucun élève n'est marqué présent : tous seront enregistrés absents.\n\nEnregistrer quand même cet appel ?"
+      );
+      if (!ok) return;
+    }
     setData({
       ...data,
       attendance: {
         ...data.attendance,
-        [key]: { marks, recordedBy: actor || null, recordedAt: new Date().toISOString() },
+        [key]: { marks: effectiveMarks, recordedBy: actor || null, recordedAt: new Date().toISOString() },
       },
     });
     setSavedFlash(true);
@@ -4896,8 +4943,8 @@ function TakeRoll({ data, setData, courses, emptyMessage, actor, showTeacherFilt
               <button onClick={() => markAll("present")} className="rounded-full border border-[#4ADE80]/30 bg-[#4ADE80]/10 px-3 py-1 text-[#4ADE80]">
                 Tout présent
               </button>
-              <button onClick={() => setMarks({})} className="rounded-full border border-white/10 px-3 py-1 text-[#A79FC0]">
-                Réinitialiser
+              <button onClick={() => markAll("absent")} className="rounded-full border border-white/10 px-3 py-1 text-[#A79FC0]">
+                Tout absent
               </button>
             </div>
             <button
@@ -4976,6 +5023,14 @@ function TakeRoll({ data, setData, courses, emptyMessage, actor, showTeacherFilt
             </Card>
           )}
 
+          <p className="text-xs text-[#5D5670]">
+            Tous les élèves sont <span className="text-[#FF6B6B]">absents</span> par défaut : cliquez sur{" "}
+            <span className="text-[#4ADE80]">Présent</span> pour ceux qui sont là.
+            <span className="ml-2 text-[#A79FC0]">
+              {presentCount} présent(s) sur {roster.length}
+            </span>
+          </p>
+
           <div className="space-y-2">
             {roster.map((s) => {
               const hasComment = s.commentaire && s.commentaire.trim();
@@ -5016,7 +5071,7 @@ function TakeRoll({ data, setData, courses, emptyMessage, actor, showTeacherFilt
                           key={opt.v}
                           onClick={() => setMark(s.id, opt.v)}
                           className={`rounded-md border px-2.5 py-1 text-xs transition ${opt.cls} ${
-                            marks[s.id] === opt.v ? "bg-white/10" : "bg-transparent opacity-50 hover:opacity-100"
+                            effectiveMarks[s.id] === opt.v ? "bg-white/10" : "bg-transparent opacity-50 hover:opacity-100"
                           }`}
                         >
                           {opt.label}
