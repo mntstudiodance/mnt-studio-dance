@@ -1291,7 +1291,7 @@ function AdminApp({ data, setData, onLogout, actorOverride }) {
   return (
     <Shell title={titles[page][0]} subtitle={titles[page][1]} nav={nav} active={page} onNav={setPage} onLogout={onLogout}>
       {page === "students" && <ManageStudents data={data} setData={setData} />}
-      {page === "unpaid" && <UnpaidStudentsView data={data} setData={setData} />}
+      {page === "unpaid" && <UnpaidStudentsView data={data} setData={setData} canEditComment={!isStaffActingAsAdmin} />}
       {page === "roll" && (
         <TakeRoll
           data={data}
@@ -2932,7 +2932,7 @@ function TransmittedNotesAdmin({ data, setData }) {
 
 /* -------------------------------- IMPAYÉS ----------------------------------- */
 
-function UnpaidStudentsView({ data, setData, readOnly }) {
+function UnpaidStudentsView({ data, setData, readOnly, canEditComment = false }) {
   const unpaid = sortStudents(data.students.filter((s) => s.statut === "impaye"));
 
   const updateStatut = (studentId, newStatut) => {
@@ -2941,6 +2941,12 @@ function UnpaidStudentsView({ data, setData, readOnly }) {
       ...data,
       students: data.students.map((s) => (s.id === studentId ? { ...s, statut: newStatut } : s)),
     });
+  };
+
+  // Commentaire : saisie réservée au compte admin (canEditComment) ; les autres comptes le voient en lecture seule.
+  const updateComment = (studentId, value) => {
+    if (!canEditComment) return;
+    setData({ ...data, students: data.students.map((s) => (s.id === studentId ? { ...s, commentaire: value } : s)) });
   };
 
   return (
@@ -2953,7 +2959,7 @@ function UnpaidStudentsView({ data, setData, readOnly }) {
       <div className="space-y-2">
         {unpaid.map((s) => (
           <Card key={s.id} className="flex flex-wrap items-center justify-between gap-3">
-            <div>
+            <div className="min-w-[240px] flex-1">
               <div className="font-medium">
                 {s.prenom} {s.nom}
               </div>
@@ -2974,6 +2980,24 @@ function UnpaidStudentsView({ data, setData, readOnly }) {
                   <CourseChip key={cid} course={data.courses.find((c) => c.id === cid)} />
                 ))}
               </div>
+              {canEditComment ? (
+                <div className="mt-2 max-w-md">
+                  <span className="mb-1 block text-[10px] uppercase tracking-[0.14em] text-[#5D5670]">Commentaire</span>
+                  <textarea
+                    className={inputCls + " text-xs"}
+                    rows={2}
+                    placeholder="Ajouter une note (relances, promesse de paiement…)"
+                    value={s.commentaire || ""}
+                    onChange={(e) => updateComment(s.id, e.target.value)}
+                  />
+                </div>
+              ) : (
+                s.commentaire && (
+                  <p className="mt-2 max-w-md whitespace-pre-wrap rounded-md border border-[#FFC857]/20 bg-[#FFC857]/5 p-2 text-xs text-[#A79FC0]">
+                    {s.commentaire}
+                  </p>
+                )
+              )}
             </div>
             {readOnly ? (
               <DossierBadge statut={s.statut} />
@@ -5169,7 +5193,7 @@ export default function App() {
   const [loading, setLoading] = useState(true);
   const sessionRestoredRef = useRef(false);
   const dataRef = useRef(null);
-  const MAX_SESSION_MS = 240 * 60 * 1000; // 4 heures
+  const MAX_SESSION_MS = 60 * 60 * 1000; // 1 heure
 
   useEffect(() => {
     dataRef.current = data;
